@@ -4,6 +4,12 @@
 
 A local Python program that records global mouse positions into SQLite, then creates heatmaps, movement statistics, and CSV exports. Data stays on your computer.
 
+## Demo
+
+![Mouse movement heatmap from playing Supreme Commander: Forged Alliance Forever](2026-09-12T21:58:36Z.png)
+
+*Mouse movement recorded during a game of Supreme Commander: Forged Alliance Forever.*
+
 ## Install
 
 Python 3.10 or newer is required. Run the installer once:
