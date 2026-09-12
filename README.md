@@ -6,7 +6,7 @@ A local Python program that records global mouse positions into SQLite, then cre
 
 ## Demo
 
-![Mouse movement heatmap from playing Supreme Commander: Forged Alliance Forever](2026-09-12T21:58:36Z.png)
+![Mouse movement heatmap from playing Supreme Commander: Forged Alliance Forever](demo-supreme-commander-forged-alliance-forever.png)
 
 *Mouse movement recorded during a game of Supreme Commander: Forged Alliance Forever.*
 
