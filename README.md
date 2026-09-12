@@ -1,6 +1,6 @@
 # Mouse Position Heatmap
 
-> :warning: **Disclaimer:** This project was vibecoded. Review and use the code at your own discretion.
+> This project was vibecoded. Review the code before using it.
 
 A local Python program that records global mouse positions into SQLite, then creates heatmaps, movement statistics, and CSV exports. Data stays on your computer.
 
@@ -22,7 +22,7 @@ To update the installation after pulling code changes, run `./install.sh` again.
 mouse-heatmap record
 ```
 
-Move the mouse normally and press **Ctrl+C** when finished. By default, every movement event supplied by the operating system is saved to `mouse_positions.sqlite`.
+Move the mouse normally and press `Ctrl+C` when finished. By default, the program saves every movement event reported by the operating system to `mouse_positions.sqlite`.
 
 Useful options:
 
@@ -37,7 +37,7 @@ mouse-heatmap record --sample-ms 20
 mouse-heatmap record --db ~/tracking/mouse.sqlite
 ```
 
-A nonzero sample interval produces a much smaller database for long recordings. It does not interpolate or invent positions.
+A nonzero sample interval keeps the database much smaller during long recordings. It does not interpolate or invent positions.
 
 ## Analyze recordings
 
@@ -59,7 +59,7 @@ The default output name is the current UTC time in RFC 3339 format, such as `202
 mouse-heatmap heatmap --output mouse_heatmap.png
 ```
 
-Analyze an older session, combine selected sessions by repeating `--session`, or include every session with `--all-sessions` (`-a`):
+Pass `--session` to analyze an older session. Repeat the option to combine sessions, or use `--all-sessions` (`-a`) to include every session:
 
 ```bash
 mouse-heatmap heatmap --session 3 --output session-3.png
@@ -67,7 +67,7 @@ mouse-heatmap heatmap --session 2 --session 3 --bins 240 --smoothing 2
 mouse-heatmap heatmap --all-sessions
 ```
 
-Open the finished image immediately in your system's default image application:
+Open the finished image in your system's default image application:
 
 ```bash
 mouse-heatmap heatmap --open
@@ -80,7 +80,7 @@ mouse-heatmap stats
 mouse-heatmap stats --session 3
 ```
 
-The report includes sample count, coordinate bounds, traveled distance, estimated active time, and average/maximum speeds. Distances and speeds are in screen pixels. Movement-event gaps longer than one second are treated as idle; change that threshold with `stats --idle-gap SECONDS`.
+The report includes sample count, coordinate bounds, distance traveled, estimated active time, and average and maximum speeds. Distances and speeds are in screen pixels. Gaps longer than one second count as idle; change the threshold with `stats --idle-gap SECONDS`.
 
 Export raw data for a spreadsheet, R, pandas, or another analysis tool:
 
@@ -108,7 +108,7 @@ Global input access is controlled by the operating system:
 
 ## Privacy and storage
 
-The program records coordinates and timestamps only—never keystrokes, window titles, screenshots, or network data. Precise pointer history can still reveal activity patterns, so protect or delete the SQLite/CSV files when they are no longer needed.
+The program records only coordinates and timestamps, never keystrokes, window titles, screenshots, or network data. Precise pointer history can still reveal activity patterns, so protect or delete the SQLite and CSV files when you no longer need them.
 
 Heatmaps represent the density of recorded movement events, not exact stationary dwell time: a pointer left still produces no new movement events. SQLite uses write-ahead logging while a recording is active, so temporary `-wal` and `-shm` files beside the database are normal. Each recording is a separate session. Heatmap generation streams samples in batches so large recordings do not have to be loaded fully into memory. Ctrl+C, SIGTERM, and SIGHUP trigger an orderly flush; a crash or forced SIGKILL can still lose the small batch currently being written.
 
