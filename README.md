@@ -1,0 +1,119 @@
+# Mouse Position Heatmap
+
+> :warning: **Disclaimer:** This project was vibecoded. Review and use the code at your own discretion.
+
+A local Python program that records global mouse positions into SQLite, then creates heatmaps, movement statistics, and CSV exports. Data stays on your computer.
+
+## Install
+
+Python 3.10 or newer is required. Run the installer once:
+
+```bash
+./install.sh
+```
+
+It creates a private `.venv`, installs the project, and links `mouse-heatmap` into `~/.local/bin`. You do not need to activate the virtual environment. If that directory is not already on your `PATH`, the installer prints the line to add to your shell configuration.
+
+To update the installation after pulling code changes, run `./install.sh` again.
+
+## Record positions
+
+```bash
+mouse-heatmap record
+```
+
+Move the mouse normally and press **Ctrl+C** when finished. By default, every movement event supplied by the operating system is saved to `mouse_positions.sqlite`.
+
+Useful options:
+
+```bash
+# Stop automatically after one hour
+mouse-heatmap record --duration 3600 --label "work session"
+
+# Limit recording to at most one point every 20 ms
+mouse-heatmap record --sample-ms 20
+
+# Use a different database
+mouse-heatmap record --db ~/tracking/mouse.sqlite
+```
+
+A nonzero sample interval produces a much smaller database for long recordings. It does not interpolate or invent positions.
+
+## Analyze recordings
+
+List sessions and their IDs:
+
+```bash
+mouse-heatmap sessions
+```
+
+Create a heatmap from the most recent session:
+
+```bash
+mouse-heatmap heatmap
+```
+
+The default output name is the current UTC time in RFC 3339 format, such as `2026-09-12T20:15:30Z.png`. Override it when needed:
+
+```bash
+mouse-heatmap heatmap --output mouse_heatmap.png
+```
+
+Analyze an older session, combine selected sessions by repeating `--session`, or include every session with `--all-sessions` (`-a`):
+
+```bash
+mouse-heatmap heatmap --session 3 --output session-3.png
+mouse-heatmap heatmap --session 2 --session 3 --bins 240 --smoothing 2
+mouse-heatmap heatmap --all-sessions
+```
+
+Open the finished image immediately in your system's default image application:
+
+```bash
+mouse-heatmap heatmap --open
+```
+
+Show movement statistics:
+
+```bash
+mouse-heatmap stats
+mouse-heatmap stats --session 3
+```
+
+The report includes sample count, coordinate bounds, traveled distance, estimated active time, and average/maximum speeds. Distances and speeds are in screen pixels. Movement-event gaps longer than one second are treated as idle; change that threshold with `stats --idle-gap SECONDS`.
+
+Export raw data for a spreadsheet, R, pandas, or another analysis tool:
+
+```bash
+mouse-heatmap export --output mouse_positions.csv
+mouse-heatmap export --session 3 --output session-3.csv
+```
+
+Every CSV row contains `session_id`, nanosecond Unix timestamp, timestamp in seconds, `x`, and `y`.
+
+Run any command with `--help` for all options:
+
+```bash
+mouse-heatmap heatmap --help
+```
+
+## Desktop permissions
+
+Global input access is controlled by the operating system:
+
+- **macOS:** allow your terminal or Python under **Privacy & Security → Accessibility**.
+- **Linux/X11:** the program must run inside the graphical session and have access to `DISPLAY`.
+- **Linux/Wayland:** many compositors intentionally block global pointer monitoring. If recording does not work, log into an X11/Xorg session. Do not disable desktop security controls.
+- **Windows:** normal desktop sessions usually work without extra setup, though endpoint security software may ask for approval.
+
+## Privacy and storage
+
+The program records coordinates and timestamps only—never keystrokes, window titles, screenshots, or network data. Precise pointer history can still reveal activity patterns, so protect or delete the SQLite/CSV files when they are no longer needed.
+
+Heatmaps represent the density of recorded movement events, not exact stationary dwell time: a pointer left still produces no new movement events. SQLite uses write-ahead logging while a recording is active, so temporary `-wal` and `-shm` files beside the database are normal. Each recording is a separate session. Heatmap generation streams samples in batches so large recordings do not have to be loaded fully into memory. Ctrl+C, SIGTERM, and SIGHUP trigger an orderly flush; a crash or forced SIGKILL can still lose the small batch currently being written.
+
+## Development
+
+```bash
+MPLBACKEND=Agg python -m unittest discover -s tests -v
+```

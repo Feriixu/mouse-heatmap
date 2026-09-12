@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+mouse_heatmap.png
+mouse_positions.csv
+build/
+dist/
+*.egg-info/
+*.png
