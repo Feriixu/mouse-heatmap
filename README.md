@@ -30,11 +30,17 @@ mouse-heatmap record
 
 Move the mouse normally and press `Ctrl+C` when finished. By default, the program saves every movement event reported by the operating system to `mouse_positions.sqlite`.
 
+Give the recording an optional tag as the first argument when you want to combine it with similar sessions later:
+
+```bash
+mouse-heatmap record foobar
+```
+
 Useful options:
 
 ```bash
-# Stop automatically after one hour
-mouse-heatmap record --duration 3600 --label "work session"
+# Stop a tagged recording automatically after one hour
+mouse-heatmap record work --duration 3600 --label "morning session"
 
 # Limit recording to at most one point every 20 ms
 mouse-heatmap record --sample-ms 20
@@ -53,6 +59,15 @@ List sessions and their IDs:
 mouse-heatmap sessions
 ```
 
+Delete one or more sessions, including all of their recorded positions, with `delete` or its `rm` alias:
+
+```bash
+mouse-heatmap sessions delete 3 5
+mouse-heatmap sessions rm 8
+```
+
+Every ID is validated before deletion, so an unknown ID will not cause a partial deletion. Deletion is permanent.
+
 Create a heatmap from the most recent session:
 
 ```bash
@@ -65,13 +80,22 @@ The default output name is the current UTC time in RFC 3339 format, such as `202
 mouse-heatmap heatmap --output mouse_heatmap.png
 ```
 
-Pass `--session` to analyze an older session. Repeat the option to combine sessions, or use `--all-sessions` (`-a`) to include every session:
+Pass `--session` to analyze an older session. Repeat the option to combine sessions, use `--tag` to combine every session with a matching tag, or use `--all-sessions` (`-a`) to include every session:
 
 ```bash
 mouse-heatmap heatmap --session 3 --output session-3.png
 mouse-heatmap heatmap --session 2 --session 3 --bins 240 --smoothing 2
+mouse-heatmap heatmap --tag foobar --output foobar.png
 mouse-heatmap heatmap --all-sessions
 ```
+
+Tag matching is case-insensitive. The `sessions` command shows each session's tag. To set or replace the tag on existing sessions, pass one or more session IDs:
+
+```bash
+mouse-heatmap tag foobar 3 5 8
+```
+
+The command validates every ID before changing anything, so an unknown ID will not leave the selected sessions partially updated.
 
 Open the finished image in your system's default image application:
 

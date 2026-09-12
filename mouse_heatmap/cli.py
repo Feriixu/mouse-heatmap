@@ -14,7 +14,15 @@ from typing import Sequence
 from . import __version__
 from .analysis import calculate_stats, create_heatmap, export_csv
 from .recorder import record_positions
-from .storage import get_session, list_sessions, open_database
+from .storage import (
+    connect_database,
+    delete_sessions,
+    get_session,
+    list_sessions,
+    open_database,
+    session_ids_for_tag,
+    tag_sessions,
+)
 
 DEFAULT_DATABASE = "mouse_positions.sqlite"
 
@@ -72,6 +80,11 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     record = subparsers.add_parser("record", help="record global mouse movement")
+    record.add_argument(
+        "tag",
+        nargs="?",
+        help="optional tag for this recording session",
+    )
     record.add_argument("--db", default=DEFAULT_DATABASE, help="SQLite database path")
     record.add_argument(
         "--sample-ms",
@@ -88,6 +101,33 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sessions = subparsers.add_parser("sessions", help="list recording sessions")
     sessions.add_argument("--db", default=DEFAULT_DATABASE, help="SQLite database path")
+    session_commands = sessions.add_subparsers(dest="sessions_command")
+    delete = session_commands.add_parser(
+        "delete",
+        aliases=["rm"],
+        help="delete recording sessions and their positions",
+    )
+    delete.add_argument(
+        "session",
+        type=int,
+        nargs="+",
+        help="session id to delete; provide multiple ids to delete them together",
+    )
+    delete.add_argument(
+        "--db",
+        default=argparse.SUPPRESS,
+        help="SQLite database path",
+    )
+
+    tag = subparsers.add_parser("tag", help="tag existing recording sessions")
+    tag.add_argument("tag", help="tag to set; replaces any existing tag")
+    tag.add_argument(
+        "session",
+        type=int,
+        nargs="+",
+        help="session id to tag; provide multiple ids to update them together",
+    )
+    tag.add_argument("--db", default=DEFAULT_DATABASE, help="SQLite database path")
 
     heatmap = subparsers.add_parser("heatmap", help="create a heatmap image")
     heatmap.add_argument("--db", default=DEFAULT_DATABASE, help="SQLite database path")
@@ -97,6 +137,10 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         action="append",
         help="session id to include; repeat to combine (default: most recent)",
+    )
+    heatmap_sessions.add_argument(
+        "--tag",
+        help="include every recording session with this tag",
     )
     heatmap_sessions.add_argument(
         "-a",
@@ -161,11 +205,16 @@ def _record_command(arguments: argparse.Namespace) -> None:
         sample_interval_ms=arguments.sample_ms,
         duration_seconds=arguments.duration,
         label=arguments.label,
+        tag=arguments.tag,
     )
     print(f"Saved {count:,} positions in session {session_id}.")
 
 
 def _sessions_command(arguments: argparse.Namespace) -> None:
+    if getattr(arguments, "sessions_command", None) in {"delete", "rm"}:
+        _delete_sessions_command(arguments)
+        return
+
     connection = open_database(arguments.db)
     try:
         sessions = list_sessions(connection)
@@ -177,7 +226,7 @@ def _sessions_command(arguments: argparse.Namespace) -> None:
 
     print(
         f"{'ID':>4}  {'POINTS':>10}  {'SAMPLE':>9}  "
-        f"{'STATUS':>9}  {'STARTED':<25}  LABEL"
+        f"{'STATUS':>9}  {'STARTED':<25}  {'TAG':<16}  LABEL"
     )
     for session in sessions:
         sample = "all" if session.sample_interval_ms == 0 else f"{session.sample_interval_ms:g}ms"
@@ -185,14 +234,49 @@ def _sessions_command(arguments: argparse.Namespace) -> None:
         print(
             f"{session.id:>4}  {session.point_count:>10,}  {sample:>9}  "
             f"{status:>9}  {_format_timestamp(session.started_at_ns):<25}  "
-            f"{session.label or '-'}"
+            f"{session.tag or '-':<16}  {session.label or '-'}"
         )
+
+
+def _connect_existing_database(path: str | Path) -> sqlite3.Connection:
+    database = Path(path).expanduser()
+    inspection = open_database(database)
+    inspection.close()
+    return connect_database(database)
+
+
+def _delete_sessions_command(arguments: argparse.Namespace) -> None:
+    connection = _connect_existing_database(arguments.db)
+    try:
+        count = delete_sessions(connection, arguments.session)
+    finally:
+        connection.close()
+    noun = "session" if count == 1 else "sessions"
+    print(f"Deleted {count} {noun}.")
+
+
+def _tag_command(arguments: argparse.Namespace) -> None:
+    connection = _connect_existing_database(arguments.db)
+    try:
+        count = tag_sessions(connection, arguments.session, arguments.tag)
+    finally:
+        connection.close()
+    noun = "session" if count == 1 else "sessions"
+    print(f"Tagged {count} {noun} as {arguments.tag.strip()!r}.")
 
 
 def _heatmap_command(arguments: argparse.Namespace) -> None:
     sessions = _session_ids(arguments.session)
     if arguments.all_sessions:
         sessions = None
+    elif arguments.tag is not None:
+        connection = open_database(arguments.db)
+        try:
+            sessions = session_ids_for_tag(connection, arguments.tag)
+        finally:
+            connection.close()
+        if not sessions:
+            raise ValueError(f"No recording sessions found with tag {arguments.tag!r}")
     elif sessions is None:
         connection = open_database(arguments.db)
         try:
@@ -255,6 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = {
         "record": _record_command,
         "sessions": _sessions_command,
+        "tag": _tag_command,
         "heatmap": _heatmap_command,
         "stats": _stats_command,
         "export": _export_command,

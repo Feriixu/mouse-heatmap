@@ -102,6 +102,7 @@ def record_positions(
     sample_interval_ms: float = 0,
     duration_seconds: float | None = None,
     label: str | None = None,
+    tag: str | None = None,
 ) -> tuple[int, int]:
     """Record global mouse positions until interrupted or duration expires.
 
@@ -125,7 +126,7 @@ def record_positions(
 
     database_path = Path(database_path).expanduser()
     connection = connect_database(database_path)
-    session_id = create_session(connection, sample_interval_ms, label)
+    session_id = create_session(connection, sample_interval_ms, label, tag)
     writer = PositionWriter(database_path, session_id)
     try:
         writer.start()

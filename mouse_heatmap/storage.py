@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at_ns INTEGER,
     sample_interval_ms REAL NOT NULL DEFAULT 0,
     label TEXT,
+    tag TEXT COLLATE NOCASE,
     hostname TEXT NOT NULL,
     platform TEXT NOT NULL,
     point_count INTEGER NOT NULL DEFAULT 0
@@ -45,6 +46,7 @@ class Session:
     hostname: str
     platform: str
     point_count: int
+    tag: str | None = None
 
 
 def connect_database(path: str | Path) -> sqlite3.Connection:
@@ -55,6 +57,15 @@ def connect_database(path: str | Path) -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
     connection.executescript(SCHEMA)
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(sessions)")
+    }
+    if "tag" not in columns:
+        connection.execute("ALTER TABLE sessions ADD COLUMN tag TEXT COLLATE NOCASE")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_tag ON sessions(tag COLLATE NOCASE)"
+    )
+    connection.commit()
     return connection
 
 
@@ -79,21 +90,38 @@ def open_database(path: str | Path) -> sqlite3.Connection:
     return connection
 
 
+def _normalized_tag(tag: str | None) -> str | None:
+    if tag is None:
+        return None
+    normalized = tag.strip()
+    if not normalized:
+        raise ValueError("tag cannot be empty")
+    return normalized
+
+
+def _sessions_have_tag_column(connection: sqlite3.Connection) -> bool:
+    return any(
+        row[1] == "tag" for row in connection.execute("PRAGMA table_info(sessions)")
+    )
+
+
 def create_session(
     connection: sqlite3.Connection,
     sample_interval_ms: float,
     label: str | None = None,
+    tag: str | None = None,
 ) -> int:
     cursor = connection.execute(
         """
         INSERT INTO sessions (
-            started_at_ns, sample_interval_ms, label, hostname, platform
-        ) VALUES (?, ?, ?, ?, ?)
+            started_at_ns, sample_interval_ms, label, tag, hostname, platform
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             time.time_ns(),
             sample_interval_ms,
             label,
+            _normalized_tag(tag),
             socket.gethostname(),
             platform.platform(),
         ),
@@ -123,10 +151,11 @@ def finish_session(
 
 
 def get_session(connection: sqlite3.Connection, session_id: int) -> Session | None:
+    tag_expression = "s.tag" if _sessions_have_tag_column(connection) else "NULL"
     row = connection.execute(
-        """
+        f"""
         SELECT s.id, s.started_at_ns, s.ended_at_ns, s.sample_interval_ms,
-               s.label, s.hostname, s.platform, COUNT(p.id)
+               s.label, s.hostname, s.platform, COUNT(p.id), {tag_expression}
         FROM sessions AS s
         LEFT JOIN positions AS p ON p.session_id = s.id
         WHERE s.id = ?
@@ -138,10 +167,11 @@ def get_session(connection: sqlite3.Connection, session_id: int) -> Session | No
 
 
 def list_sessions(connection: sqlite3.Connection) -> list[Session]:
+    tag_expression = "s.tag" if _sessions_have_tag_column(connection) else "NULL"
     rows = connection.execute(
-        """
+        f"""
         SELECT s.id, s.started_at_ns, s.ended_at_ns, s.sample_interval_ms,
-               s.label, s.hostname, s.platform, COUNT(p.id)
+               s.label, s.hostname, s.platform, COUNT(p.id), {tag_expression}
         FROM sessions AS s
         LEFT JOIN positions AS p ON p.session_id = s.id
         GROUP BY s.id
@@ -149,6 +179,77 @@ def list_sessions(connection: sqlite3.Connection) -> list[Session]:
         """
     ).fetchall()
     return [Session(*row) for row in rows]
+
+
+def session_ids_for_tag(connection: sqlite3.Connection, tag: str) -> list[int]:
+    """Return all session ids whose tag matches case-insensitively."""
+    normalized = _normalized_tag(tag)
+    if not _sessions_have_tag_column(connection):
+        return []
+    rows = connection.execute(
+        """
+        SELECT id
+        FROM sessions
+        WHERE tag = ? COLLATE NOCASE
+        ORDER BY started_at_ns
+        """,
+        (normalized,),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def _validated_session_ids(
+    connection: sqlite3.Connection,
+    session_ids: Sequence[int],
+) -> list[int]:
+    unique_ids = list(dict.fromkeys(session_ids))
+    if not unique_ids:
+        raise ValueError("At least one session id is required")
+    placeholders = ",".join("?" for _ in unique_ids)
+    existing_ids = {
+        row[0]
+        for row in connection.execute(
+            f"SELECT id FROM sessions WHERE id IN ({placeholders})",
+            tuple(unique_ids),
+        )
+    }
+    missing = [session_id for session_id in unique_ids if session_id not in existing_ids]
+    if missing:
+        joined = ", ".join(str(session_id) for session_id in missing)
+        raise ValueError(f"Unknown session id(s): {joined}")
+    return unique_ids
+
+
+def tag_sessions(
+    connection: sqlite3.Connection,
+    session_ids: Sequence[int],
+    tag: str,
+) -> int:
+    """Set one tag on existing sessions and return the number updated."""
+    unique_ids = _validated_session_ids(connection, session_ids)
+    normalized = _normalized_tag(tag)
+    placeholders = ",".join("?" for _ in unique_ids)
+    cursor = connection.execute(
+        f"UPDATE sessions SET tag = ? WHERE id IN ({placeholders})",
+        (normalized, *unique_ids),
+    )
+    connection.commit()
+    return cursor.rowcount
+
+
+def delete_sessions(
+    connection: sqlite3.Connection,
+    session_ids: Sequence[int],
+) -> int:
+    """Delete sessions and their positions, returning the number removed."""
+    unique_ids = _validated_session_ids(connection, session_ids)
+    placeholders = ",".join("?" for _ in unique_ids)
+    cursor = connection.execute(
+        f"DELETE FROM sessions WHERE id IN ({placeholders})",
+        tuple(unique_ids),
+    )
+    connection.commit()
+    return cursor.rowcount
 
 
 def position_bounds(

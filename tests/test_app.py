@@ -31,7 +31,7 @@ class MouseHeatmapTests(unittest.TestCase):
         self.database = self.root / "positions.sqlite"
         connection = connect_database(self.database)
         try:
-            first = create_session(connection, 0, "first")
+            first = create_session(connection, 0, "first", "gaming")
             connection.executemany(
                 """
                 INSERT INTO positions (session_id, timestamp_ns, x, y)
@@ -45,7 +45,7 @@ class MouseHeatmapTests(unittest.TestCase):
             connection.commit()
             finish_session(connection, first, 2_000_000_000)
 
-            second = create_session(connection, 10, "second")
+            second = create_session(connection, 10, "second", "gaming")
             connection.executemany(
                 """
                 INSERT INTO positions (session_id, timestamp_ns, x, y)
@@ -74,7 +74,48 @@ class MouseHeatmapTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual([session.point_count for session in sessions], [2, 2])
+        self.assertEqual([session.tag for session in sessions], ["gaming", "gaming"])
         self.assertEqual(bounds, (2, 0, 3, 0, 4))
+
+    def test_existing_database_schema_is_migrated_for_tags(self) -> None:
+        legacy_database = self.root / "legacy.sqlite"
+        connection = sqlite3.connect(legacy_database)
+        connection.executescript(
+            """
+            CREATE TABLE sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at_ns INTEGER NOT NULL,
+                ended_at_ns INTEGER,
+                sample_interval_ms REAL NOT NULL DEFAULT 0,
+                label TEXT,
+                hostname TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                point_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                timestamp_ns INTEGER NOT NULL,
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL
+            );
+            """
+        )
+        connection.close()
+
+        connection = connect_database(legacy_database)
+        try:
+            session_id = create_session(connection, 0, tag="migrated")
+            session = next(
+                item for item in list_sessions(connection) if item.id == session_id
+            )
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(sessions)")
+            }
+        finally:
+            connection.close()
+        self.assertIn("tag", columns)
+        self.assertEqual(session.tag, "migrated")
 
     def test_stats_sum_session_durations_without_idle_gap(self) -> None:
         stats = calculate_stats(self.database)
@@ -117,6 +158,139 @@ class MouseHeatmapTests(unittest.TestCase):
             )
         self.assertEqual(result, 0)
         self.assertIsNone(create.call_args.kwargs["session_ids"])
+
+    def test_sessions_delete_removes_session_and_positions(self) -> None:
+        result = main(
+            [
+                "sessions",
+                "delete",
+                str(self.first),
+                "--db",
+                str(self.database),
+            ]
+        )
+        connection = connect_database(self.database)
+        try:
+            session_ids = [session.id for session in list_sessions(connection)]
+            deleted_positions = connection.execute(
+                "SELECT COUNT(*) FROM positions WHERE session_id = ?",
+                (self.first,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(result, 0)
+        self.assertNotIn(self.first, session_ids)
+        self.assertIn(self.second, session_ids)
+        self.assertEqual(deleted_positions, 0)
+
+    def test_sessions_rm_alias_deletes_multiple_sessions(self) -> None:
+        result = main(
+            [
+                "sessions",
+                "rm",
+                str(self.first),
+                str(self.second),
+                "--db",
+                str(self.database),
+            ]
+        )
+        connection = connect_database(self.database)
+        try:
+            sessions = list_sessions(connection)
+            position_count = connection.execute(
+                "SELECT COUNT(*) FROM positions"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(result, 0)
+        self.assertEqual(sessions, [])
+        self.assertEqual(position_count, 0)
+
+    def test_sessions_delete_does_not_partially_remove_unknown_sessions(self) -> None:
+        result = main(
+            [
+                "sessions",
+                "delete",
+                str(self.first),
+                "999999",
+                "--db",
+                str(self.database),
+            ]
+        )
+        connection = connect_database(self.database)
+        try:
+            session_ids = {session.id for session in list_sessions(connection)}
+        finally:
+            connection.close()
+        self.assertEqual(result, 1)
+        self.assertIn(self.first, session_ids)
+        self.assertIn(self.second, session_ids)
+
+    def test_tag_command_updates_multiple_existing_sessions(self) -> None:
+        result = main(
+            [
+                "tag",
+                "work",
+                str(self.first),
+                str(self.second),
+                "--db",
+                str(self.database),
+            ]
+        )
+        connection = connect_database(self.database)
+        try:
+            tags = {session.id: session.tag for session in list_sessions(connection)}
+        finally:
+            connection.close()
+        self.assertEqual(result, 0)
+        self.assertEqual(tags[self.first], "work")
+        self.assertEqual(tags[self.second], "work")
+
+    def test_tag_command_does_not_partially_update_unknown_sessions(self) -> None:
+        result = main(
+            [
+                "tag",
+                "work",
+                str(self.first),
+                "999999",
+                "--db",
+                str(self.database),
+            ]
+        )
+        connection = connect_database(self.database)
+        try:
+            first = next(
+                session
+                for session in list_sessions(connection)
+                if session.id == self.first
+            )
+        finally:
+            connection.close()
+        self.assertEqual(result, 1)
+        self.assertEqual(first.tag, "gaming")
+
+    def test_heatmap_tag_option_uses_all_matching_sessions(self) -> None:
+        with mock.patch("mouse_heatmap.cli.create_heatmap", return_value=4) as create:
+            result = main(
+                ["heatmap", "--db", str(self.database), "--tag", "GAMING"]
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            create.call_args.kwargs["session_ids"],
+            [self.first, self.second],
+        )
+
+    def test_heatmap_rejects_a_tag_without_sessions(self) -> None:
+        with mock.patch("mouse_heatmap.cli.create_heatmap") as create:
+            result = main(
+                ["heatmap", "--db", str(self.database), "--tag", "missing"]
+            )
+        self.assertEqual(result, 1)
+        create.assert_not_called()
+
+    def test_record_accepts_a_positional_tag(self) -> None:
+        arguments = _build_parser().parse_args(["record", "foobar"])
+        self.assertEqual(arguments.tag, "foobar")
 
     def test_heatmap_open_option_launches_default_application(self) -> None:
         output = self.root / "opened.png"
@@ -169,11 +343,17 @@ class MouseHeatmapTests(unittest.TestCase):
         )
         self.assertEqual(result, 1)
 
-    def test_read_command_does_not_create_a_missing_database(self) -> None:
-        missing = self.root / "missing.sqlite"
-        result = main(["sessions", "--db", str(missing)])
-        self.assertEqual(result, 1)
-        self.assertFalse(missing.exists())
+    def test_read_or_mutating_commands_do_not_create_a_missing_database(self) -> None:
+        for command in (
+            ["sessions"],
+            ["sessions", "rm", "1"],
+            ["tag", "work", "1"],
+        ):
+            with self.subTest(command=command):
+                missing = self.root / "missing.sqlite"
+                result = main([*command, "--db", str(missing)])
+                self.assertEqual(result, 1)
+                self.assertFalse(missing.exists())
 
     def test_export_cannot_overwrite_database(self) -> None:
         original_size = self.database.stat().st_size
@@ -257,6 +437,7 @@ class MouseHeatmapTests(unittest.TestCase):
                 recorded_database,
                 duration_seconds=0.001,
                 label="timed",
+                tag="automated",
             )
 
         self.assertEqual(count, 1)
@@ -268,6 +449,7 @@ class MouseHeatmapTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(session.point_count, 1)
+        self.assertEqual(session.tag, "automated")
         self.assertIsNotNone(session.ended_at_ns)
 
 
